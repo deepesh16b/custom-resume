@@ -1,0 +1,37 @@
+name: Update Resume
+
+on:
+  repository_dispatch:
+    types: [update-resume]
+
+permissions:
+  contents: write
+
+jobs:
+  update:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install dependency
+        run: pip install requests
+
+      - name: Update resume
+        env:
+          SKILLS: ${{ github.event.client_payload.skills }}
+        run: python update_resume.py
+
+      - name: Commit changes
+        run: |
+          git config user.name "resume-bot"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add resume.docx
+          git diff --cached --quiet || git commit -m "Update backend skills"
+          git push
