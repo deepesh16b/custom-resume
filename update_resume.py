@@ -23,6 +23,7 @@ def get_skills():
 
     for skill in skills:
         key = skill.casefold()
+
         if key not in seen:
             seen.add(key)
             result.append(skill)
@@ -31,31 +32,40 @@ def get_skills():
 
 
 def update_resume(skills):
+
+    # Always start from the untouched master
     shutil.copy2(MASTER, OUTPUT)
 
     data = OUTPUT.read_bytes()
 
     with zipfile.ZipFile(io.BytesIO(data), "r") as zin:
-        xml = zin.read("word/document.xml")
 
-        # Target the existing Backend skill text run.
+        document_xml = zin.read("word/document.xml").decode("utf-8")
+
+        # Find the existing Backend skills text.
         pattern = re.compile(
-            rb'(<w:t[^>]*>Spring Boot • Spring Security • '
-            rb'Spring Data JPA • Hibernate • REST APIs • JWT • '
-            rb'Maven • Node\.js</w:t>)'
+            r'(<w:t[^>]*>'
+            r'[^<]*Spring Boot • Spring Security • '
+            r'Spring Data JPA • Hibernate • REST APIs • JWT • '
+            r'Maven • Node\.js'
+            r'</w:t>)'
         )
 
-        match = pattern.search(xml)
+        match = pattern.search(document_xml)
 
         if not match:
-            raise RuntimeError("Backend skills section not found.")
+            raise RuntimeError(
+                "Could not find the Backend skills section."
+            )
 
-        current = match.group(1).decode("utf-8")
+        current = match.group(1)
+
+        # Extract current skills
+        text_only = re.sub(r'<[^>]+>', '', current)
 
         existing = {
             x.strip().casefold()
-            for x in re.findall(r'>([^<]+)</w:t>', current)
-            for x in x.split("•")
+            for x in text_only.split("•")
             if x.strip()
         }
 
@@ -66,25 +76,25 @@ def update_resume(skills):
         ]
 
         if not new_skills:
-            print("No new skills.")
+            print("No new skills to add.")
             return
 
         addition = " • " + " • ".join(new_skills)
 
-        addition_xml = (
-            addition
-            .replace("&", "&amp;")
-            .replace("<", "&lt;")
-            .replace(">", "&gt;")
+        # Add only the new text before </w:t>
+        replacement = (
+            match.group(1)[:-6]
+            + addition
+            + "</w:t>"
         )
 
-        replacement = match.group(1)[:-5] + addition_xml.encode() + b"</w:t>"
-
-        new_xml = (
-            xml[:match.start()]
+        document_xml = (
+            document_xml[:match.start()]
             + replacement
-            + xml[match.end():]
+            + document_xml[match.end():]
         )
+
+        updated_xml = document_xml.encode("utf-8")
 
         output = io.BytesIO()
 
@@ -95,20 +105,24 @@ def update_resume(skills):
         ) as zout:
 
             for item in zin.infolist():
-                content = (
-                    new_xml
-                    if item.filename == "word/document.xml"
-                    else zin.read(item.filename)
-                )
+
+                if item.filename == "word/document.xml":
+                    content = updated_xml
+                else:
+                    content = zin.read(item.filename)
 
                 zout.writestr(item, content)
 
     OUTPUT.write_bytes(output.getvalue())
 
-    print("Added:", ", ".join(new_skills))
+    print(
+        "Created custom resume with:",
+        ", ".join(new_skills)
+    )
 
 
 if __name__ == "__main__":
+
     skills = get_skills()
 
     if not skills:
