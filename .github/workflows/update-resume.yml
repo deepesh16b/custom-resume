@@ -1,18 +1,18 @@
-name: Update Resume
+name: Generate Custom Resume
 
 on:
   repository_dispatch:
     types: [update-resume]
 
 permissions:
-  contents: write
+  contents: read
 
 jobs:
-  update:
+  generate:
     runs-on: ubuntu-latest
 
     steps:
-      - name: Checkout
+      - name: Checkout master resume
         uses: actions/checkout@v4
 
       - name: Setup Python
@@ -20,18 +20,27 @@ jobs:
         with:
           python-version: "3.12"
 
-      - name: Install dependency
-        run: pip install requests
+      - name: Install dependencies
+        run: |
+          pip install requests
+          sudo apt-get update
+          sudo apt-get install -y libreoffice
 
-      - name: Update resume
+      - name: Create custom DOCX
         env:
           SKILLS: ${{ github.event.client_payload.skills }}
         run: python update_resume.py
 
-      - name: Commit changes
+      - name: Convert DOCX to PDF
         run: |
-          git config user.name "resume-bot"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add resume.docx
-          git diff --cached --quiet || git commit -m "Update backend skills"
-          git push
+          libreoffice \
+            --headless \
+            --convert-to pdf \
+            --outdir . \
+            custom-resume.docx
+
+      - name: Send PDF to Telegram
+        env:
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ github.event.client_payload.chat_id }}
+        run: python send_pdf.py
