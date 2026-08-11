@@ -1,21 +1,23 @@
 import os
 import io
 import re
-import html
+import shutil
 import zipfile
 from pathlib import Path
 
-RESUME = Path("resume.docx")
+MASTER = Path("master-resume.docx")
+OUTPUT = Path("custom-resume.docx")
 
 
 def get_skills():
     raw = os.environ.get("SKILLS", "").strip()
 
-    # Accept: Kafka, Redis, GraphQL
-    # Also accepts: Kafka; Redis; GraphQL
-    skills = [x.strip() for x in re.split(r"[,;\n]+", raw) if x.strip()]
+    skills = [
+        x.strip()
+        for x in re.split(r"[,;\n]+", raw)
+        if x.strip()
+    ]
 
-    # Remove duplicates while preserving order
     result = []
     seen = set()
 
@@ -28,45 +30,47 @@ def get_skills():
     return result
 
 
-def update_backend(skills):
-    data = RESUME.read_bytes()
+def update_resume(skills):
+    shutil.copy2(MASTER, OUTPUT)
+
+    data = OUTPUT.read_bytes()
 
     with zipfile.ZipFile(io.BytesIO(data), "r") as zin:
-        document_xml = zin.read("word/document.xml")
+        xml = zin.read("word/document.xml")
 
-        # Find the Backend label and the text node containing its skills.
-        # We modify ONLY that text node. All formatting XML remains untouched.
+        # Target the existing Backend skill text run.
         pattern = re.compile(
-            rb'(?:<w:t[^>]*>)([^<]*Spring Boot[^<]*Node\.js)(</w:t>)',
-            re.DOTALL
+            rb'(<w:t[^>]*>Spring Boot • Spring Security • '
+            rb'Spring Data JPA • Hibernate • REST APIs • JWT • '
+            rb'Maven • Node\.js</w:t>)'
         )
 
-        match = pattern.search(document_xml)
+        match = pattern.search(xml)
 
         if not match:
-            raise RuntimeError("Backend skills text was not found.")
+            raise RuntimeError("Backend skills section not found.")
 
-        current_xml_text = match.group(1).decode("utf-8")
-        current_text = html.unescape(current_xml_text)
+        current = match.group(1).decode("utf-8")
 
         existing = {
             x.strip().casefold()
-            for x in current_text.split("•")
+            for x in re.findall(r'>([^<]+)</w:t>', current)
+            for x in x.split("•")
             if x.strip()
         }
 
         new_skills = [
-            skill for skill in skills
+            skill
+            for skill in skills
             if skill.casefold() not in existing
         ]
 
         if not new_skills:
-            print("No new skills to add.")
-            return False
+            print("No new skills.")
+            return
 
         addition = " • " + " • ".join(new_skills)
 
-        # XML-safe text
         addition_xml = (
             addition
             .replace("&", "&amp;")
@@ -74,30 +78,34 @@ def update_backend(skills):
             .replace(">", "&gt;")
         )
 
-        new_text = match.group(1) + addition_xml.encode("utf-8")
+        replacement = match.group(1)[:-5] + addition_xml.encode() + b"</w:t>"
 
-        updated_xml = (
-            document_xml[:match.start(1)]
-            + new_text
-            + document_xml[match.end(1):]
+        new_xml = (
+            xml[:match.start()]
+            + replacement
+            + xml[match.end():]
         )
 
-        # Rebuild the DOCX while keeping every other file unchanged.
         output = io.BytesIO()
 
-        with zipfile.ZipFile(output, "w", zipfile.ZIP_DEFLATED) as zout:
+        with zipfile.ZipFile(
+            output,
+            "w",
+            zipfile.ZIP_DEFLATED
+        ) as zout:
+
             for item in zin.infolist():
                 content = (
-                    updated_xml
+                    new_xml
                     if item.filename == "word/document.xml"
                     else zin.read(item.filename)
                 )
+
                 zout.writestr(item, content)
 
-    RESUME.write_bytes(output.getvalue())
+    OUTPUT.write_bytes(output.getvalue())
 
     print("Added:", ", ".join(new_skills))
-    return True
 
 
 if __name__ == "__main__":
@@ -106,4 +114,4 @@ if __name__ == "__main__":
     if not skills:
         raise RuntimeError("No skills supplied.")
 
-    update_backend(skills)
+    update_resume(skills)
