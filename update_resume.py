@@ -4,13 +4,15 @@ import re
 import shutil
 import zipfile
 from pathlib import Path
-from lxml import etree
+from xml.etree import ElementTree as ET
 
 MASTER = Path("master-resume.docx")
 OUTPUT = Path("custom-resume.docx")
 
-W_NS = "http://schemas.openxmlformats.org/wordprocessingml/2006/main"
-NS = {"w": W_NS}
+W = "http://schemas.openxmlformats.org/wordprocessingml/2006/main"
+NS = {"w": W}
+
+ET.register_namespace("w", W)
 
 
 def get_skills():
@@ -37,7 +39,7 @@ def get_skills():
 
 def update_resume(skills):
 
-    # ALWAYS start from the untouched master
+    # Always start from untouched master
     shutil.copy2(MASTER, OUTPUT)
 
     data = OUTPUT.read_bytes()
@@ -46,23 +48,27 @@ def update_resume(skills):
 
         document_xml = zin.read("word/document.xml")
 
-        root = etree.fromstring(document_xml)
+        root = ET.fromstring(document_xml)
 
         backend_cell = None
 
         # Find the table row containing "Backend:"
-        for row in root.xpath(".//w:tr", namespaces=NS):
+        for row in root.iter(f"{{{W}}}tr"):
 
-            cells = row.xpath("./w:tc", namespaces=NS)
+            cells = [
+                child
+                for child in row.findall(f"{{{W}}}tc")
+            ]
 
             if len(cells) < 2:
                 continue
 
-            first_cell_text = "".join(
-                cells[0].xpath(".//w:t/text()", namespaces=NS)
+            first_text = "".join(
+                node.text or ""
+                for node in cells[0].iter(f"{{{W}}}t")
             )
 
-            if "Backend:" in first_cell_text:
+            if "Backend:" in first_text:
                 backend_cell = cells[1]
                 break
 
@@ -71,10 +77,8 @@ def update_resume(skills):
                 "Could not find Backend row in Skills table."
             )
 
-        # Get all text nodes in the second cell
-        text_nodes = backend_cell.xpath(
-            ".//w:t",
-            namespaces=NS
+        text_nodes = list(
+            backend_cell.iter(f"{{{W}}}t")
         )
 
         if not text_nodes:
@@ -103,19 +107,18 @@ def update_resume(skills):
             print("No new skills to add.")
             return
 
-        # Add to the LAST text node.
-        # This preserves the existing formatting XML.
+        # Add only to the final existing text node.
+        # Formatting properties remain untouched.
         addition = " • " + " • ".join(new_skills)
 
         text_nodes[-1].text = (
             text_nodes[-1].text or ""
         ) + addition
 
-        updated_xml = etree.tostring(
+        updated_xml = ET.tostring(
             root,
-            xml_declaration=True,
-            encoding="UTF-8",
-            standalone=True
+            encoding="utf-8",
+            xml_declaration=True
         )
 
         output = io.BytesIO()
