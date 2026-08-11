@@ -4,9 +4,13 @@ import re
 import shutil
 import zipfile
 from pathlib import Path
+from lxml import etree
 
 MASTER = Path("master-resume.docx")
 OUTPUT = Path("custom-resume.docx")
+
+W_NS = "http://schemas.openxmlformats.org/wordprocessingml/2006/main"
+NS = {"w": W_NS}
 
 
 def get_skills():
@@ -33,39 +37,59 @@ def get_skills():
 
 def update_resume(skills):
 
-    # Always start from the untouched master
+    # ALWAYS start from the untouched master
     shutil.copy2(MASTER, OUTPUT)
 
     data = OUTPUT.read_bytes()
 
     with zipfile.ZipFile(io.BytesIO(data), "r") as zin:
 
-        document_xml = zin.read("word/document.xml").decode("utf-8")
+        document_xml = zin.read("word/document.xml")
 
-        # Find the existing Backend skills text.
-        pattern = re.compile(
-            r'(<w:t[^>]*>'
-            r'[^<]*Spring Boot • Spring Security • '
-            r'Spring Data JPA • Hibernate • REST APIs • JWT • '
-            r'Maven • Node\.js'
-            r'</w:t>)'
-        )
+        root = etree.fromstring(document_xml)
 
-        match = pattern.search(document_xml)
+        backend_cell = None
 
-        if not match:
-            raise RuntimeError(
-                "Could not find the Backend skills section."
+        # Find the table row containing "Backend:"
+        for row in root.xpath(".//w:tr", namespaces=NS):
+
+            cells = row.xpath("./w:tc", namespaces=NS)
+
+            if len(cells) < 2:
+                continue
+
+            first_cell_text = "".join(
+                cells[0].xpath(".//w:t/text()", namespaces=NS)
             )
 
-        current = match.group(1)
+            if "Backend:" in first_cell_text:
+                backend_cell = cells[1]
+                break
 
-        # Extract current skills
-        text_only = re.sub(r'<[^>]+>', '', current)
+        if backend_cell is None:
+            raise RuntimeError(
+                "Could not find Backend row in Skills table."
+            )
+
+        # Get all text nodes in the second cell
+        text_nodes = backend_cell.xpath(
+            ".//w:t",
+            namespaces=NS
+        )
+
+        if not text_nodes:
+            raise RuntimeError(
+                "Backend cell contains no text."
+            )
+
+        current_text = "".join(
+            node.text or ""
+            for node in text_nodes
+        )
 
         existing = {
             x.strip().casefold()
-            for x in text_only.split("•")
+            for x in current_text.split("•")
             if x.strip()
         }
 
@@ -79,22 +103,20 @@ def update_resume(skills):
             print("No new skills to add.")
             return
 
+        # Add to the LAST text node.
+        # This preserves the existing formatting XML.
         addition = " • " + " • ".join(new_skills)
 
-        # Add only the new text before </w:t>
-        replacement = (
-            match.group(1)[:-6]
-            + addition
-            + "</w:t>"
-        )
+        text_nodes[-1].text = (
+            text_nodes[-1].text or ""
+        ) + addition
 
-        document_xml = (
-            document_xml[:match.start()]
-            + replacement
-            + document_xml[match.end():]
+        updated_xml = etree.tostring(
+            root,
+            xml_declaration=True,
+            encoding="UTF-8",
+            standalone=True
         )
-
-        updated_xml = document_xml.encode("utf-8")
 
         output = io.BytesIO()
 
